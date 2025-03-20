@@ -239,8 +239,16 @@ spec:
                     type: string
                 type: object
               image:
+                default: cloudamqp/lavinmq:2.2.0
                 type: string
               ports:
+                default:
+                - containerPort: 5672
+                  name: amqp
+                - containerPort: 15672
+                  name: http
+                - containerPort: 1883
+                  name: mqtt
                 items:
                   description: ContainerPort represents a network port in a single
                     container.
@@ -279,11 +287,13 @@ spec:
                   type: object
                 type: array
               replicas:
+                default: 1
                 format: int32
+                maximum: 3
+                minimum: 1
                 type: integer
             required:
             - dataVolumeClaim
-            - ports
             type: object
           status:
             description: LavinMQStatus defines the observed state of LavinMQ

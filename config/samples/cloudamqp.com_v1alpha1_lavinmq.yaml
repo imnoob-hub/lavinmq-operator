@@ -6,7 +6,6 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: lavinmq-sample
 spec:
-  image: cloudamqp/lavinmq:latest
   replicas: 1
   ports:
     - containerPort: 5672

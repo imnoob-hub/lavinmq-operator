@@ -29,11 +29,20 @@ type LavinMQSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
-	Image    string `json:"image,omitempty"`
-	Replicas int32  `json:"replicas,omitempty"`
+	// +kubebuilder:default="cloudamqp/lavinmq:2.2.0"
+	// +optional
+	Image string `json:"image,omitempty"`
 
-	// +required
-	Ports []corev1.ContainerPort `json:"ports"`
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=3
+	// +kubebuilder:default=1
+	// +optional
+	Replicas int32 `json:"replicas,omitempty"`
+
+	// +kubebuilder:default={{containerPort:5672,name:"amqp"},{containerPort:15672,name:"http"},{containerPort:1883,name:"mqtt"}}
+	// +optional
+	Ports []corev1.ContainerPort `json:"ports,omitempty"`
+
 	// +required
 	DataVolumeClaimSpec corev1.PersistentVolumeClaimSpec `json:"dataVolumeClaim"`
 }
