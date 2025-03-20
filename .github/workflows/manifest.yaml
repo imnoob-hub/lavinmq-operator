@@ -1,0 +1,36 @@
+name: Check Manifests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  check-manifests:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.24'
+
+    - name: Install dependencies
+      run: |
+        go mod download
+        go mod verify
+
+    - name: Generate manifests and deepcopy
+      run: make manifests && make generate
+
+    - name: Check for uncommitted changes
+      run: |
+        if [[ $(git status --porcelain) ]]; then
+          echo "There are uncommitted changes in the repository after generating manifests."
+          echo "Please run 'make manifests' and/or 'make generate' locally and commit the changes."
+          git status
+          git diff
+          exit 1
+        fi
