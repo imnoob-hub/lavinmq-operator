@@ -12,28 +12,6 @@ spec:
   selector:
     app: lavinmq
 ---
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: lavinmq-data
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 10Gi
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: etcd-data
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 1Gi
----
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -61,11 +39,6 @@ spec:
             - name: lavinmq-data
               mountPath: /var/lib/lavinmq         
           command: ["/bin/sh", "-c", "lavinmq -b 0.0.0.0 --clustering --clustering-bind :: --clustering-advertised-uri=tcp://lavinmq-0:5679 --clustering-etcd-endpoints=localhost:2379 --log-level=debug" ]
-          env:
-            - name: RABBITMQ_DEFAULT_USER
-              value: "admin"
-            - name: RABBITMQ_DEFAULT_PASS
-              value: "admin"
       initContainers:
         - name: lavinmq-etcd
           image: bitnami/etcd:latest

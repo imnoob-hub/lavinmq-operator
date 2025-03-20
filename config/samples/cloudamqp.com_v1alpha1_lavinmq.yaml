@@ -6,4 +6,16 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: lavinmq-sample
 spec:
-  # TODO(user): Add fields here
+  image: cloudamqp/lavinmq:latest
+  replicas: 1
+  ports:
+    - containerPort: 5672
+      name: amqp
+    - containerPort: 15672
+      name: http
+  dataVolumeClaim:
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: 10Gi

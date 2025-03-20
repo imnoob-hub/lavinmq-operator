@@ -18,19 +18,38 @@ package controller
 
 import (
 	"context"
+	"fmt"
+	"strings"
+	"time"
 
+	cloudamqpcomv1alpha1 "lavinmq-operator/api/v1alpha1"
+
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+)
 
-	cloudamqpcomv1alpha1 "lavinmq-operator/api/v1alpha1"
+// Definitions to manage status conditions
+const (
+	// typeAvailableLavinMQ represents the status of the StatefulSet reconciliation
+	typeAvailableLavinMQ = "Available"
+	// typeDegradedLavinMQ represents the status used when the custom resource is deleted and the finalizer operations are yet to occur.
+	typeDegradedLavinMQ = "Degraded"
 )
 
 // LavinMQReconciler reconciles a LavinMQ object
 type LavinMQReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=cloudamqp.com.cloudamqp.com,resources=lavinmqs,verbs=get;list;watch;create;update;patch;delete
@@ -47,9 +66,65 @@ type LavinMQReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.19.0/pkg/reconcile
 func (r *LavinMQReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = log.FromContext(ctx)
+	log := log.FromContext(ctx)
 
 	// TODO(user): your logic here
+	fmt.Printf("Reconciling LavinMQ %s\n", req.NamespacedName)
+
+	instance := &cloudamqpcomv1alpha1.LavinMQ{}
+	err := r.Get(ctx, req.NamespacedName, instance)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			log.Info("LavinMQ not found, either deleted or never created")
+			return ctrl.Result{}, nil
+		}
+
+		log.Error(err, "Failed to get LavinMQ")
+		return ctrl.Result{}, err
+	}
+
+	log.Info("LavinMQ found", "name", instance.Name)
+
+	found := &appsv1.StatefulSet{}
+	err = r.Get(ctx, types.NamespacedName{Name: instance.Name, Namespace: instance.Namespace}, found)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			log.Info("StatefulSet not found, creating")
+			statefulset, err := r.createStatefulSet(ctx, instance)
+			if err != nil {
+				log.Error(err, "Failed to create StatefulSet for LavinMQ")
+
+				meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
+					Type:    typeAvailableLavinMQ, // TODO: Is this correct?
+					Status:  metav1.ConditionFalse,
+					Reason:  "Reconciling",
+					Message: fmt.Sprintf("Failed to create StatefulSet for LavinMQ: %s : %s", instance.Name, err),
+				})
+
+				if err := r.Status().Update(ctx, instance); err != nil {
+					log.Error(err, "Failed to update LavinMQ status")
+					return ctrl.Result{}, err
+				}
+
+				return ctrl.Result{}, err
+			}
+
+			log.Info("Creating StatefulSet for LavinMQ", "name", statefulset.Name)
+
+			if err := r.Create(ctx, statefulset); err != nil {
+				log.Error(err, "Failed to create StatefulSet for LavinMQ",
+					"Deployment.Namespace", statefulset.Namespace,
+					"Deployment.Name", statefulset.Name)
+				return ctrl.Result{}, err
+			}
+
+			log.Info("Created StatefulSet for LavinMQ", "name", statefulset.Name)
+
+			return ctrl.Result{RequeueAfter: time.Minute}, nil
+		}
+	}
+
+	log.Info("StatefulSet found, reconciling")
 
 	return ctrl.Result{}, nil
 }
@@ -58,5 +133,77 @@ func (r *LavinMQReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 func (r *LavinMQReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&cloudamqpcomv1alpha1.LavinMQ{}).
+		Owns(&appsv1.StatefulSet{}).
+		// May need deployment idk
+		//Owns(&appsv1.Deployment{}).
 		Complete(r)
+}
+
+func (r *LavinMQReconciler) createStatefulSet(ctx context.Context, instance *cloudamqpcomv1alpha1.LavinMQ) (*appsv1.StatefulSet, error) {
+	labels := labelsForLavinMQ(instance)
+	replicas := instance.Spec.Replicas
+	ports := instance.Spec.Ports
+	volume := instance.Spec.DataVolumeClaimSpec
+	volumeName := instance.Name + "-data"
+
+	image := instance.Spec.Image
+	statefulset := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      instance.Name,
+			Namespace: instance.Namespace,
+		},
+		Spec: appsv1.StatefulSetSpec{
+			ServiceName: instance.Name,
+			Replicas:    &replicas,
+			Selector: &metav1.LabelSelector{
+				MatchLabels: labels,
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: labels,
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "lavinmq",
+							Image: image,
+							Ports: ports,
+							VolumeMounts: []corev1.VolumeMount{
+								{
+									Name:      volumeName,
+									MountPath: "/var/lib/lavinmq",
+								},
+							},
+						},
+					},
+				},
+			},
+			VolumeClaimTemplates: []corev1.PersistentVolumeClaim{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: volumeName,
+					},
+					Spec: volume,
+				},
+			},
+		},
+	}
+
+	// Setting owner reference
+	if err := ctrl.SetControllerReference(instance, statefulset, r.Scheme); err != nil {
+		return nil, err
+	}
+
+	return statefulset, nil
+}
+
+func labelsForLavinMQ(instance *cloudamqpcomv1alpha1.LavinMQ) map[string]string {
+	image := instance.Spec.Image
+	version := strings.Split(image, ":")[1]
+
+	return map[string]string{
+		"app.kubernetes.io/name":       "lavinmq-operator",
+		"app.kubernetes.io/managed-by": "LavinMQController",
+		"app.kubernetes.io/version":    version,
+	}
 }
