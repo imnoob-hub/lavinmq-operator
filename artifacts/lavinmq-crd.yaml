@@ -1,0 +1,77 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: lavinmqs.cloudamqp.com
+spec:
+  group: cloudamqp.com
+  names:
+    kind: LavinMQ
+    listKind: LavinMQList
+    plural: lavinmqs
+    singular: lavinmq
+    shortNames:
+      - lmq
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                image:
+                  type: string
+                  default: "cloudamqp/lavinmq:latest"
+                replicas:
+                  type: integer
+                  default: 1
+                  minimum: 1
+                ports:
+                  type: object
+                  properties:
+                    http:
+                      type: integer
+                      default: 15672
+                    amqp:
+                      type: integer
+                      default: 5672
+                storage:
+                  type: object
+                  properties:
+                    size:
+                      type: string
+                      default: "10Gi"
+                auth:
+                  type: object
+                  properties:
+                    username:
+                      type: string
+                      default: "admin"
+                    password:
+                      type: string
+                      default: "admin"
+                clustering:
+                  type: object
+                  properties:
+                    enabled:
+                      type: boolean
+                      default: true
+                    etcd:
+                      type: object
+                      properties:
+                        storage:
+                          type: string
+                          default: "1Gi"
+              required:
+                - image
+      additionalPrinterColumns:
+        - name: Replicas
+          type: integer
+          jsonPath: .spec.replicas
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp 

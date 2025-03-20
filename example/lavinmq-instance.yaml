@@ -1,0 +1,12 @@
+apiVersion: cloudamqp.com/v1alpha1
+kind: LavinMQ
+metadata:
+  name: my-lavinmq
+spec:
+  image: cloudamqp/lavinmq:latest
+  replicas: 1
+  ports:
+    http: 15672
+    amqp: 5672
+  storage:
+    size: "10Gi"
