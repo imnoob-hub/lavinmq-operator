@@ -1,0 +1,9 @@
+apiVersion: cloudamqp.com.cloudamqp.com/v1alpha1
+kind: Etcd
+metadata:
+  labels:
+    app.kubernetes.io/name: operator-sdk
+    app.kubernetes.io/managed-by: kustomize
+  name: etcd-sample
+spec:
+  # TODO(user): Add fields here
