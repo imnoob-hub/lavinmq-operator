@@ -209,6 +209,8 @@ func (r *LavinMQReconciler) createStatefulSet(ctx context.Context, instance *clo
 	volumeName := instance.Name + "-data"
 	configVolumeName := fmt.Sprintf("%s-config", instance.Name)
 
+	secretVolume, secretVolumeMount := r.referenceSecret(instance)
+
 	image := instance.Spec.Image
 	statefulset := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
@@ -267,6 +269,18 @@ func (r *LavinMQReconciler) createStatefulSet(ctx context.Context, instance *clo
 		},
 	}
 
+	// Add secret volume and mount if they exist
+	if secretVolume != nil && secretVolumeMount != nil {
+		statefulset.Spec.Template.Spec.Containers[0].VolumeMounts = append(
+			statefulset.Spec.Template.Spec.Containers[0].VolumeMounts,
+			*secretVolumeMount,
+		)
+		statefulset.Spec.Template.Spec.Volumes = append(
+			statefulset.Spec.Template.Spec.Volumes,
+			*secretVolume,
+		)
+	}
+
 	// Setting owner reference
 	if err := ctrl.SetControllerReference(instance, statefulset, r.Scheme); err != nil {
 		return nil, err
@@ -275,13 +289,43 @@ func (r *LavinMQReconciler) createStatefulSet(ctx context.Context, instance *clo
 	return statefulset, nil
 }
 
+func (r *LavinMQReconciler) referenceSecret(instance *cloudamqpcomv1alpha1.LavinMQ) (*corev1.Volume, *corev1.VolumeMount) {
+	if instance.Spec.Secrets == nil {
+		return nil, nil
+	}
+
+	volume := &corev1.Volume{
+		Name: "tls",
+		VolumeSource: corev1.VolumeSource{
+			Secret: &corev1.SecretVolumeSource{
+				SecretName: instance.Spec.Secrets[0].Name,
+			},
+		},
+	}
+
+	volumeMount := &corev1.VolumeMount{
+		Name:      "tls",
+		MountPath: "/etc/lavinmq/tls",
+		ReadOnly:  true,
+	}
+
+	return volume, volumeMount
+}
+
 func labelsForLavinMQ(instance *cloudamqpcomv1alpha1.LavinMQ) map[string]string {
 	image := instance.Spec.Image
 	version := strings.Split(image, ":")[1]
 
-	return map[string]string{
+	labels := map[string]string{
 		"app.kubernetes.io/name":       "lavinmq-operator",
 		"app.kubernetes.io/managed-by": "LavinMQController",
 		"app.kubernetes.io/version":    version,
 	}
+
+	// Append instance labels
+	for k, v := range instance.Labels {
+		labels[k] = v
+	}
+
+	return labels
 }
