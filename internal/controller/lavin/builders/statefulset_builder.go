@@ -3,6 +3,7 @@ package builder
 import (
 	"fmt"
 	"reflect"
+	"slices"
 
 	"lavinmq-operator/internal/controller/utils"
 
@@ -58,7 +59,8 @@ func (b *StatefulSetBuilder) baseStatefulSet() *appsv1.StatefulSet {
 		ServiceName: fmt.Sprintf("%s-service", b.Instance.Name),
 		Template: corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{
-				Labels: statefulset.Labels,
+				Labels:      statefulset.Labels,
+				Annotations: make(map[string]string),
 			},
 			Spec: corev1.PodSpec{
 				Containers: []corev1.Container{
@@ -142,7 +144,7 @@ func (b *StatefulSetBuilder) cliArgs() []string {
 }
 
 func (b *StatefulSetBuilder) appendTlsConfig(statefulset *appsv1.StatefulSet) {
-	if b.Instance.Spec.Secrets == nil {
+	if b.Instance.Spec.TlsSecret == nil {
 		return
 	}
 
@@ -160,7 +162,7 @@ func (b *StatefulSetBuilder) appendTlsConfig(statefulset *appsv1.StatefulSet) {
 			Name: "tls",
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
-					SecretName: b.Instance.Spec.Secrets[0].Name,
+					SecretName: b.Instance.Spec.TlsSecret.Name,
 				},
 			},
 		},
@@ -183,13 +185,65 @@ func (b *StatefulSetBuilder) Diff(old, new client.Object) (client.Object, bool, 
 		changed = true
 	}
 
-	if !reflect.DeepEqual(oldSts.Spec.Template, newSts.Spec.Template) {
-		logger.Info("Template changed, updating")
-		oldSts.Spec.Template = newSts.Spec.Template
-		changed = true
+	changed, err := b.diffTemplate(&oldSts.Spec.Template.Spec, &newSts.Spec.Template.Spec)
+
+	if err != nil {
+		return nil, false, err
 	}
 
 	// TODO: Do we need to do a disk check here now that we have a PVC?
 
 	return oldSts, changed, nil
+}
+
+func (b *StatefulSetBuilder) diffTemplate(old, new *corev1.PodSpec) (bool, error) {
+	changed := false
+	if len(old.Containers) != len(new.Containers) && len(old.Containers) != 1 {
+		return false, fmt.Errorf("container count mismatch, expects 1")
+	}
+
+	// Pointer the old as that's the object we're mutating
+	oldContainer := &old.Containers[0]
+	newContainer := new.Containers[0]
+
+	if oldContainer.Image != newContainer.Image {
+		oldContainer.Image = newContainer.Image
+		changed = true
+	}
+
+	// TODO: Expand this to own methods and granular checks
+	if !reflect.DeepEqual(oldContainer.Args, newContainer.Args) {
+		oldContainer.Args = newContainer.Args
+		changed = true
+	}
+
+	// TODO: Expand this to own methods and granular checks
+	if !reflect.DeepEqual(oldContainer.Ports, newContainer.Ports) {
+		oldContainer.Ports = newContainer.Ports
+		changed = true
+	}
+
+	index := slices.IndexFunc(old.Volumes, func(v corev1.Volume) bool {
+		return v.Name == "tls"
+	})
+
+	if index != -1 {
+		secretName := old.Volumes[index].VolumeSource.Secret.SecretName
+		// Checks if the secret name is the same as the one in the instance spec
+		if b.Instance.Spec.TlsSecret != nil && b.Instance.Spec.TlsSecret.Name != secretName {
+			changed = true
+		}
+	}
+
+	if len(old.Volumes) != len(new.Volumes) {
+		changed = true
+	}
+
+	old.Volumes = new.Volumes
+
+	if changed {
+		b.Logger.Info("Template changed, updating")
+	}
+
+	return changed, nil
 }
