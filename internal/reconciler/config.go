@@ -1,18 +1,21 @@
-package builder
+package reconciler
 
 import (
+	"context"
 	"fmt"
+	"lavinmq-operator/internal/controller/utils"
 	"reflect"
 	"strings"
 
 	ini "gopkg.in/ini.v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrl "sigs.k8s.io/controller-runtime"
 )
 
-type ServiceConfigBuilder struct {
-	*ResourceBuilder
+type ConfigReconciler struct {
+	*ResourceReconciler
 }
 
 var (
@@ -37,37 +40,50 @@ port = 5679
 `
 )
 
-func (builder *ResourceBuilder) ConfigBuilder() *ServiceConfigBuilder {
-	return &ServiceConfigBuilder{
-		ResourceBuilder: builder,
+func (reconciler *ResourceReconciler) ConfigReconciler() *ConfigReconciler {
+	return &ConfigReconciler{
+		ResourceReconciler: reconciler,
 	}
 }
 
-func (b *ServiceConfigBuilder) Name() string {
-	return "config"
-}
-
-func (b *ServiceConfigBuilder) NewObject() client.Object {
-	labels := map[string]string{
-		"app.kubernetes.io/name":       "lavinmq",
-		"app.kubernetes.io/managed-by": "lavinmq-operator",
-		"app.kubernetes.io/instance":   b.Instance.Name,
+func (b *ConfigReconciler) Reconcile(ctx context.Context) (ctrl.Result, error) {
+	configMap, err := b.newObject()
+	if err != nil {
+		return ctrl.Result{}, err
 	}
 
-	return &corev1.ConfigMap{
+	err = b.GetItem(ctx, configMap)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			b.CreateItem(ctx, configMap)
+			return ctrl.Result{}, nil
+		}
+
+		return ctrl.Result{}, err
+	}
+
+	err = b.updateFields(ctx, configMap)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	err = b.Client.Update(ctx, configMap)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	return ctrl.Result{}, nil
+}
+
+func (b *ConfigReconciler) newObject() (*corev1.ConfigMap, error) {
+	configMap := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-config", b.Instance.Name),
+			Name:      b.Instance.Name,
 			Namespace: b.Instance.Namespace,
-			Labels:    labels,
+			Labels:    utils.LabelsForLavinMQ(b.Instance),
 		},
 		Data: map[string]string{},
 	}
-}
-
-// BuildConfigMap creates a ConfigMap for LavinMQ configuration
-func (b *ServiceConfigBuilder) Build() (client.Object, error) {
-
-	configMap := b.NewObject().(*corev1.ConfigMap)
 
 	defaultConfig, err := ini.Load([]byte(defaultConfig))
 	if err != nil {
@@ -127,14 +143,20 @@ func (b *ServiceConfigBuilder) Build() (client.Object, error) {
 	return configMap, nil
 }
 
-func (b *ServiceConfigBuilder) Diff(old, new client.Object) (client.Object, bool, error) {
-	oldConfigMap := old.(*corev1.ConfigMap)
-	newConfigMap := new.(*corev1.ConfigMap)
-	changed := false
-	if !reflect.DeepEqual(oldConfigMap.Data["lavinmq.ini"], newConfigMap.Data["lavinmq.ini"]) {
-		oldConfigMap.Data["lavinmq.ini"] = newConfigMap.Data["lavinmq.ini"]
-		changed = true
+func (b *ConfigReconciler) updateFields(ctx context.Context, configMap *corev1.ConfigMap) error {
+	newConfigMap, err := b.newObject()
+	if err != nil {
+		return err
 	}
 
-	return oldConfigMap, changed, nil
+	if !reflect.DeepEqual(configMap.Data["lavinmq.ini"], newConfigMap.Data["lavinmq.ini"]) {
+		configMap.Data["lavinmq.ini"] = newConfigMap.Data["lavinmq.ini"]
+	}
+
+	return nil
+}
+
+// Name returns the name of the config reconciler
+func (b *ConfigReconciler) Name() string {
+	return "config"
 }
