@@ -41,9 +41,161 @@ spec:
             properties:
               config:
                 properties:
-                  consumer_timeout:
-                    format: int64
-                    type: integer
+                  amqp:
+                    properties:
+                      channel_max:
+                        description: Maximum number of channels per connection.
+                        format: int64
+                        type: integer
+                      frame_max:
+                        description: Maximum size of an AMQP frame in bytes.
+                        format: int64
+                        type: integer
+                      heartbeat:
+                        description: Interval in seconds for AMQP heartbeats.
+                        format: int64
+                        type: integer
+                      max_message_size:
+                        description: Maximum size of a message in bytes.
+                        format: int64
+                        type: integer
+                      port:
+                        default: 5672
+                        description: Port for the AMQP interface. Set to -1 to disable.
+                        format: int32
+                        maximum: 65535
+                        minimum: -1
+                        type: integer
+                      tls_port:
+                        description: Port for the AMQPS interface.
+                        format: int32
+                        maximum: 65535
+                        minimum: 0
+                        type: integer
+                    type: object
+                  clustering:
+                    properties:
+                      max_unsynced_actions:
+                        description: Maximum number of unsynced actions allowed in
+                          the cluster.
+                        format: int64
+                        type: integer
+                    type: object
+                  main:
+                    properties:
+                      consumer_timeout:
+                        description: The timeout for consumers in milliseconds.
+                        format: int64
+                        type: integer
+                      default_consumer_prefetch:
+                        description: Default prefetch value for consumers if not set
+                          by the consumer.
+                        format: int64
+                        type: integer
+                      default_password:
+                        description: |-
+                          Hashed password for the default user.
+                          Use lavinmqctl hash_password or /api/auth/hash_password to generate the password hash.
+                        type: string
+                      default_user:
+                        description: The default user.
+                        type: string
+                      free_disk_min:
+                        description: The minimum value of free disk space in bytes
+                          before LavinMQ starts to control flow.
+                        format: int64
+                        type: integer
+                      free_disk_warn:
+                        description: The minimum value of free disk space in bytes
+                          before LavinMQ warns about low disk space.
+                        format: int64
+                        type: integer
+                      log_exchange:
+                        description: Enables the log exchange.
+                        type: boolean
+                      log_level:
+                        description: |-
+                          Controls how detailed the log should be.
+                          The level can be one of: none, fatal, error, warn, info, debug.
+                        type: string
+                      max_deleted_definitions:
+                        description: The number of deleted queues, unbinds, etc.,
+                          that compacts the definitions file.
+                        format: int64
+                        type: integer
+                      segment_size:
+                        description: The size of segment files in bytes.
+                        format: int64
+                        type: integer
+                      set_timestamp:
+                        description: Enables setting the timestamp property in msg
+                          headers.
+                        type: boolean
+                      socket_buffer_size:
+                        description: The socket buffer size in bytes.
+                        format: int64
+                        type: integer
+                      stats_interval:
+                        description: Statistics collection interval in milliseconds.
+                        format: int64
+                        type: integer
+                      stats_log_size:
+                        description: Number of entries in the statistics log file
+                          before the oldest entry is removed.
+                        format: int64
+                        type: integer
+                      tcp_keepalive:
+                        description: TCP keepalive settings as a tuple {idle, interval,
+                          probes/count}.
+                        type: string
+                      tcp_nodelay:
+                        description: Setting for disabling Nagle's algorithm and sending
+                          the data as soon as it's available.
+                        type: boolean
+                      tls_ciphers:
+                        description: Specifies the TLS ciphers to use.
+                        type: string
+                      tls_min_version:
+                        description: Specifies the minimum TLS version to use.
+                        type: string
+                    type: object
+                  mgmt:
+                    properties:
+                      port:
+                        default: 15672
+                        description: Port for the HTTP management interface. Set to
+                          -1 to disable.
+                        format: int32
+                        maximum: 65535
+                        minimum: -1
+                        type: integer
+                      tls_port:
+                        description: Port for the HTTPS management interface.
+                        format: int32
+                        maximum: 65535
+                        minimum: 0
+                        type: integer
+                    type: object
+                  mqtt:
+                    properties:
+                      max_inflight_messages:
+                        description: Maximum number of in-flight messages per client.
+                        format: int64
+                        type: integer
+                      port:
+                        default: 1883
+                        description: Port for the MQTT interface. Set to -1 to disable.
+                        format: int32
+                        maximum: 65535
+                        minimum: -1
+                        type: integer
+                      tls_port:
+                        description: Port for the MQTTS interface.
+                        format: int32
+                        maximum: 65535
+                        minimum: 0
+                        type: integer
+                    type: object
                 type: object
               dataVolumeClaim:
                 description: Will override the accessmode and force it to ReadWriteOnce
@@ -249,51 +401,6 @@ spec:
               image:
                 default: cloudamqp/lavinmq:2.2.0
                 type: string
-              ports:
-                default:
-                - containerPort: 5672
-                  name: amqp
-                - containerPort: 15672
-                  name: http
-                - containerPort: 1883
-                  name: mqtt
-                items:
-                  description: ContainerPort represents a network port in a single
-                    container.
-                  properties:
-                    containerPort:
-                      description: |-
-                        Number of port to expose on the pod's IP address.
-                        This must be a valid port number, 0 < x < 65536.
-                      format: int32
-                      type: integer
-                    hostIP:
-                      description: What host IP to bind the external port to.
-                      type: string
-                    hostPort:
-                      description: |-
-                        Number of port to expose on the host.
-                        If specified, this must be a valid port number, 0 < x < 65536.
-                        If HostNetwork is specified, this must match ContainerPort.
-                        Most containers do not need this.
-                      format: int32
-                      type: integer
-                    name:
-                      description: |-
-                        If specified, this must be an IANA_SVC_NAME and unique within the pod. Each
-                        named port in a pod must have a unique name. Name for the port that can be
-                        referred to by services.
-                      type: string
-                    protocol:
-                      default: TCP
-                      description: |-
-                        Protocol for port. Must be UDP, TCP, or SCTP.
-                        Defaults to "TCP".
-                      type: string
-                  required:
-                  - containerPort
-                  type: object
-                type: array
               replicas:
                 default: 1
                 format: int32

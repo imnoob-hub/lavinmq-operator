@@ -20,8 +20,7 @@ type ConfigReconciler struct {
 
 var (
 	defaultConfig = `
-	[main]
-log_level = info
+[main]
 data_dir = /var/lib/lavinmq
 
 [mgmt]
@@ -29,12 +28,11 @@ bind = 0.0.0.0
 
 [amqp]
 bind = 0.0.0.0
-heartbeat = 300
-	`
 
-	clusteringConfig = `
+[mqtt]
+bind = 0.0.0.0
+
 [clustering]
-enabled = true
 bind = 0.0.0.0
 port = 5679
 `
@@ -84,66 +82,152 @@ func (b *ConfigReconciler) newObject() (*corev1.ConfigMap, error) {
 		},
 		Data: map[string]string{},
 	}
-
-	defaultConfig, err := ini.Load([]byte(defaultConfig))
-	if err != nil {
-		return nil, fmt.Errorf("failed to load default config: %w", err)
-	}
-
-	for _, port := range b.Instance.Spec.Ports {
-		if port.Name == "http" {
-			defaultConfig.Section("mgmt").Key("port").SetValue(fmt.Sprintf("%d", port.ContainerPort))
-		}
-		if port.Name == "amqp" {
-			defaultConfig.Section("amqp").Key("port").SetValue(fmt.Sprintf("%d", port.ContainerPort))
-		}
-		if port.Name == "https" {
-			defaultConfig.Section("mgmt").Key("tls_port").SetValue(fmt.Sprintf("%d", port.ContainerPort))
-		}
-		if port.Name == "amqps" {
-			defaultConfig.Section("amqp").Key("tls_port").SetValue(fmt.Sprintf("%d", port.ContainerPort))
-		}
-	}
-
-	clusterConfig, err := ini.Load([]byte(clusteringConfig))
-	if err != nil {
-		return nil, fmt.Errorf("failed to load cluster config: %w", err)
-	}
-
-	if b.Instance.Spec.EtcdEndpoints != nil {
-		clusterConfig.Section("clustering").Key("etcd_endpoints").SetValue(strings.Join(b.Instance.Spec.EtcdEndpoints, ","))
-	}
-
-	if b.Instance.Spec.Config.ConsumerTimeout != 0 {
-		defaultConfig.Section("main").Key("consumer_timeout").SetValue(fmt.Sprintf("%d", b.Instance.Spec.Config.ConsumerTimeout))
-	}
-
-	// Sets the etcd-prefix config value to the instance name. Allows for multiple lavinmq clusters to share the same etcd cluster.
-	clusterConfig.Section("clustering").Key("etcd_prefix").SetValue(b.Instance.Name)
-
 	config := strings.Builder{}
+	cfg, err := ini.Load([]byte(defaultConfig))
 
-	if b.Instance.Spec.TlsSecret != nil {
-		defaultConfig.Section("main").Key("tls_cert").SetValue(fmt.Sprintf("/etc/lavinmq/tls/%s", "tls.crt"))
-		defaultConfig.Section("main").Key("tls_key").SetValue(fmt.Sprintf("/etc/lavinmq/tls/%s", "tls.key"))
-	}
-
-	_, err = defaultConfig.WriteTo(&config)
 	if err != nil {
-		return nil, fmt.Errorf("failed to write config: %w", err)
+		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
 
-	_, err = clusterConfig.WriteTo(&config)
+	b.AppendMainConfig(cfg)
+	b.AppendAmqpConfig(cfg)
+	b.AppendMqttConfig(cfg)
+	b.AppendMgmtConfig(cfg)
+	b.AppendClusteringConfig(cfg)
+
+	_, err = cfg.WriteTo(&config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to write cluster config: %w", err)
 	}
 
 	configMap.Data["lavinmq.ini"] = config.String()
-
 	return configMap, nil
 }
 
-func (b *ConfigReconciler) updateFields(ctx context.Context, configMap *corev1.ConfigMap) error {
+func (b *ConfigReconciler) AppendMainConfig(cfg *ini.File) {
+	mainConfig := b.Instance.Spec.Config.Main
+
+	if mainConfig.ConsumerTimeout != 0 {
+		cfg.Section("main").Key("consumer_timeout").SetValue(fmt.Sprintf("%d", mainConfig.ConsumerTimeout))
+	}
+	if mainConfig.DefaultConsumerPrefetch != 0 {
+		cfg.Section("main").Key("default_consumer_prefetch").SetValue(fmt.Sprintf("%d", mainConfig.DefaultConsumerPrefetch))
+	}
+	if mainConfig.DefaultPassword != "" {
+		cfg.Section("main").Key("default_password").SetValue(mainConfig.DefaultPassword)
+	}
+	if mainConfig.DefaultUser != "" {
+		cfg.Section("main").Key("default_user").SetValue(mainConfig.DefaultUser)
+	}
+	if mainConfig.FreeDiskMin != 0 {
+		cfg.Section("main").Key("free_disk_min").SetValue(fmt.Sprintf("%d", mainConfig.FreeDiskMin))
+	}
+	if mainConfig.FreeDiskWarn != 0 {
+		cfg.Section("main").Key("free_disk_warn").SetValue(fmt.Sprintf("%d", mainConfig.FreeDiskWarn))
+	}
+	if mainConfig.LogExchange {
+		cfg.Section("main").Key("log_exchange").SetValue(fmt.Sprintf("%t", mainConfig.LogExchange))
+	}
+	if mainConfig.LogLevel != "" {
+		cfg.Section("main").Key("log_level").SetValue(mainConfig.LogLevel)
+	}
+	if mainConfig.MaxDeletedDefinitions != 0 {
+		cfg.Section("main").Key("max_deleted_definitions").SetValue(fmt.Sprintf("%d", mainConfig.MaxDeletedDefinitions))
+	}
+	if mainConfig.SegmentSize != 0 {
+		cfg.Section("main").Key("segment_size").SetValue(fmt.Sprintf("%d", mainConfig.SegmentSize))
+	}
+	if mainConfig.SetTimestamp {
+		cfg.Section("main").Key("set_timestamp").SetValue(fmt.Sprintf("%t", mainConfig.SetTimestamp))
+	}
+	if mainConfig.SocketBufferSize != 0 {
+		cfg.Section("main").Key("socket_buffer_size").SetValue(fmt.Sprintf("%d", mainConfig.SocketBufferSize))
+	}
+	if mainConfig.StatsInterval != 0 {
+		cfg.Section("main").Key("stats_interval").SetValue(fmt.Sprintf("%d", mainConfig.StatsInterval))
+	}
+	if mainConfig.StatsLogSize != 0 {
+		cfg.Section("main").Key("stats_log_size").SetValue(fmt.Sprintf("%d", mainConfig.StatsLogSize))
+	}
+	if mainConfig.TcpKeepalive != "" {
+		cfg.Section("main").Key("tcp_keepalive").SetValue(mainConfig.TcpKeepalive)
+	}
+	if mainConfig.TcpNodelay {
+		cfg.Section("main").Key("tcp_nodelay").SetValue(fmt.Sprintf("%t", mainConfig.TcpNodelay))
+	}
+	if mainConfig.TlsCiphers != "" {
+		cfg.Section("main").Key("tls_ciphers").SetValue(mainConfig.TlsCiphers)
+	}
+	if mainConfig.TlsMinVersion != "" {
+		cfg.Section("main").Key("tls_min_version").SetValue(mainConfig.TlsMinVersion)
+	}
+	if b.Instance.Spec.TlsSecret != nil {
+		cfg.Section("main").Key("tls_cert").SetValue(fmt.Sprintf("/etc/lavinmq/tls/%s", "tls.crt"))
+		cfg.Section("main").Key("tls_key").SetValue(fmt.Sprintf("/etc/lavinmq/tls/%s", "tls.key"))
+	}
+}
+
+func (b *ConfigReconciler) AppendClusteringConfig(cfg *ini.File) {
+
+	if b.Instance.Spec.EtcdEndpoints != nil {
+		cfg.Section("clustering").Key("etcd_prefix").SetValue(b.Instance.Name)
+		cfg.Section("clustering").Key("etcd_endpoints").SetValue(strings.Join(b.Instance.Spec.EtcdEndpoints, ","))
+		cfg.Section("clustering").Key("enabled").SetValue("true")
+	}
+
+	if b.Instance.Spec.Config.Clustering.MaxUnsyncedActions != 0 {
+		cfg.Section("clustering").Key("max_unsynced_actions").SetValue(fmt.Sprintf("%d", b.Instance.Spec.Config.Clustering.MaxUnsyncedActions))
+	}
+}
+
+func (b *ConfigReconciler) AppendAmqpConfig(cfg *ini.File) {
+	amqpConfig := b.Instance.Spec.Config.Amqp
+
+	if amqpConfig.ChannelMax != 0 {
+		cfg.Section("amqp").Key("channel_max").SetValue(fmt.Sprintf("%d", amqpConfig.ChannelMax))
+	}
+	if amqpConfig.FrameMax != 0 {
+		cfg.Section("amqp").Key("frame_max").SetValue(fmt.Sprintf("%d", amqpConfig.FrameMax))
+	}
+	if amqpConfig.Heartbeat != 0 {
+		cfg.Section("amqp").Key("heartbeat").SetValue(fmt.Sprintf("%d", amqpConfig.Heartbeat))
+	}
+	if amqpConfig.MaxMessageSize != 0 {
+		cfg.Section("amqp").Key("max_message_size").SetValue(fmt.Sprintf("%d", amqpConfig.MaxMessageSize))
+	}
+
+	if amqpConfig.TlsPort != 0 {
+		cfg.Section("amqp").Key("tls_port").SetValue(fmt.Sprintf("%d", amqpConfig.TlsPort))
+	}
+
+	cfg.Section("amqp").Key("port").SetValue(fmt.Sprintf("%d", amqpConfig.Port))
+}
+
+func (b *ConfigReconciler) AppendMqttConfig(cfg *ini.File) {
+	mqttConfig := b.Instance.Spec.Config.Mqtt
+
+	if mqttConfig.MaxInflightMessages != 0 {
+		cfg.Section("mqtt").Key("max_inflight_messages").SetValue(fmt.Sprintf("%d", mqttConfig.MaxInflightMessages))
+	}
+
+	if mqttConfig.TlsPort != 0 {
+		cfg.Section("mqtt").Key("tls_port").SetValue(fmt.Sprintf("%d", mqttConfig.TlsPort))
+	}
+
+	cfg.Section("mqtt").Key("port").SetValue(fmt.Sprintf("%d", mqttConfig.Port))
+}
+
+func (b *ConfigReconciler) AppendMgmtConfig(cfg *ini.File) {
+	mgmtConfig := b.Instance.Spec.Config.Mgmt
+
+	if mgmtConfig.TlsPort != 0 {
+		cfg.Section("mgmt").Key("tls_port").SetValue(fmt.Sprintf("%d", mgmtConfig.TlsPort))
+	}
+
+	cfg.Section("mgmt").Key("port").SetValue(fmt.Sprintf("%d", mgmtConfig.Port))
+}
+
+func (b *ConfigReconciler) updateFields(_ context.Context, configMap *corev1.ConfigMap) error {
 	newConfigMap, err := b.newObject()
 	if err != nil {
 		return err

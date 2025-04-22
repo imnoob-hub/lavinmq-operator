@@ -69,14 +69,14 @@ func (b *StatefulSetReconciler) newObject() *appsv1.StatefulSet {
 }
 
 func (b *StatefulSetReconciler) appendSpec(sts *appsv1.StatefulSet) *appsv1.StatefulSet {
-	configVolumeName := fmt.Sprintf("%s-config", b.Instance.Name)
+	configVolumeName := b.Instance.Name
 
 	sts.Spec = appsv1.StatefulSetSpec{
 		Replicas: &b.Instance.Spec.Replicas,
 		Selector: &metav1.LabelSelector{
 			MatchLabels: sts.Labels,
 		},
-		ServiceName: fmt.Sprintf("%s-service", b.Instance.Name),
+		ServiceName: b.Instance.Name,
 		Template: corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{
 				Labels:      sts.Labels,
@@ -89,7 +89,7 @@ func (b *StatefulSetReconciler) appendSpec(sts *appsv1.StatefulSet) *appsv1.Stat
 						Image:   b.Instance.Spec.Image,
 						Command: []string{"/usr/bin/lavinmq"},
 						Args:    b.cliArgs(),
-						Ports:   b.Instance.Spec.Ports,
+						Ports:   b.portsFromSpec(),
 						VolumeMounts: []corev1.VolumeMount{
 							{
 								Name:      "data",
@@ -145,6 +145,47 @@ func (b *StatefulSetReconciler) appendSpec(sts *appsv1.StatefulSet) *appsv1.Stat
 	}
 
 	return sts
+}
+func (b *StatefulSetReconciler) portsFromSpec() []corev1.ContainerPort {
+	ports := []corev1.ContainerPort{}
+	if b.Instance.Spec.EtcdEndpoints != nil {
+		ports = appendContainerPort(ports, 5679, "clustering")
+	}
+
+	if b.Instance.Spec.Config.Mgmt.Port > 0 {
+		ports = appendContainerPort(ports, b.Instance.Spec.Config.Mgmt.Port, "http")
+	}
+
+	if b.Instance.Spec.Config.Mgmt.TlsPort != 0 {
+		ports = appendContainerPort(ports, b.Instance.Spec.Config.Mgmt.TlsPort, "https")
+	}
+
+	if b.Instance.Spec.Config.Amqp.Port > 0 {
+		ports = appendContainerPort(ports, b.Instance.Spec.Config.Amqp.Port, "amqp")
+	}
+
+	if b.Instance.Spec.Config.Amqp.TlsPort != 0 {
+		ports = appendContainerPort(ports, b.Instance.Spec.Config.Amqp.TlsPort, "amqps")
+	}
+
+	if b.Instance.Spec.Config.Mqtt.Port > 0 {
+		ports = appendContainerPort(ports, b.Instance.Spec.Config.Mqtt.Port, "mqtt")
+	}
+
+	if b.Instance.Spec.Config.Mqtt.TlsPort != 0 {
+		ports = appendContainerPort(ports, b.Instance.Spec.Config.Mqtt.TlsPort, "mqtts")
+	}
+
+	return ports
+}
+
+func appendContainerPort(containerPorts []corev1.ContainerPort, port int32, name string) []corev1.ContainerPort {
+	containerPorts = append(containerPorts, corev1.ContainerPort{
+		Name:          name,
+		ContainerPort: port,
+		Protocol:      corev1.ProtocolTCP,
+	})
+	return containerPorts
 }
 
 func (b *StatefulSetReconciler) cliArgs() []string {
@@ -224,10 +265,9 @@ func (b *StatefulSetReconciler) diffTemplate(old *corev1.PodSpec) {
 		oldContainer.Args = cliArgs
 	}
 
-	// TODO: Expand this to own methods and granular checks
-	if !reflect.DeepEqual(oldContainer.Ports, b.Instance.Spec.Ports) {
+	if !reflect.DeepEqual(oldContainer.Ports, b.portsFromSpec()) {
 		b.Logger.Info("ports changed, updating")
-		oldContainer.Ports = b.Instance.Spec.Ports
+		oldContainer.Ports = b.portsFromSpec()
 	}
 
 	index := slices.IndexFunc(old.Volumes, func(v corev1.Volume) bool {
