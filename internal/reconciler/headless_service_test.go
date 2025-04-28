@@ -1,149 +1,171 @@
 package reconciler_test
 
 import (
-	"context"
-	cloudamqpcomv1alpha1 "lavinmq-operator/api/v1alpha1"
 	"lavinmq-operator/internal/reconciler"
+	testutils "lavinmq-operator/internal/test_utils"
 	"slices"
+	"testing"
 
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
+	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-var _ = Describe("HeadlessServiceReconciler", func() {
-	var namespacedName = types.NamespacedName{
-		Name:      "test-resource",
-		Namespace: "default",
+func TestDefaultHeadlessService(t *testing.T) {
+	t.Parallel()
+	instance := testutils.GetDefaultInstance(&testutils.DefaultInstanceSettings{})
+	err := testutils.CreateNamespace(t.Context(), k8sClient, instance.Namespace)
+	assert.NoErrorf(t, err, "Failed to create namespace")
+	defer testutils.DeleteNamespace(t.Context(), k8sClient, instance.Namespace)
+
+	defer k8sClient.Delete(t.Context(), instance)
+
+	rc := &reconciler.HeadlessServiceReconciler{
+		ResourceReconciler: &reconciler.ResourceReconciler{
+			Instance: instance,
+			Scheme:   scheme.Scheme,
+			Client:   k8sClient,
+		},
 	}
-	var (
-		instance *cloudamqpcomv1alpha1.LavinMQ
-		rc       *reconciler.HeadlessServiceReconciler
-	)
 
-	BeforeEach(func() {
-		instance = &cloudamqpcomv1alpha1.LavinMQ{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      namespacedName.Name,
-				Namespace: namespacedName.Namespace,
-			},
-		}
+	assert.NoError(t, k8sClient.Create(t.Context(), instance))
 
-		rc = &reconciler.HeadlessServiceReconciler{
-			ResourceReconciler: &reconciler.ResourceReconciler{
-				Instance: instance,
-				Scheme:   scheme.Scheme,
-				Client:   k8sClient,
-				Logger:   log.FromContext(context.Background()),
-			},
-		}
+	rc.Reconcile(t.Context())
 
-		Expect(k8sClient.Create(context.Background(), instance)).To(Succeed())
+	service := &corev1.Service{}
+	assert.NoError(t, k8sClient.Get(t.Context(), types.NamespacedName{Name: instance.Name, Namespace: instance.Namespace}, service))
+	assert.Equal(t, instance.Name, service.Name)
+	assert.Equal(t, "None", service.Spec.ClusterIP)
+	assert.Len(t, service.Spec.Ports, 3)
+}
+
+func TestCustomPorts(t *testing.T) {
+	t.Parallel()
+	instance := testutils.GetDefaultInstance(&testutils.DefaultInstanceSettings{})
+	err := testutils.CreateNamespace(t.Context(), k8sClient, instance.Namespace)
+	assert.NoErrorf(t, err, "Failed to create namespace")
+	defer testutils.DeleteNamespace(t.Context(), k8sClient, instance.Namespace)
+
+	defer k8sClient.Delete(t.Context(), instance)
+
+	instance.Spec.Config.Amqp.Port = 1111
+	instance.Spec.Config.Mgmt.Port = 2222
+	instance.Spec.Config.Amqp.TlsPort = 3333
+	instance.Spec.Config.Mgmt.TlsPort = 4444
+	instance.Spec.Config.Mqtt.Port = 5555
+
+	assert.NoError(t, k8sClient.Create(t.Context(), instance))
+
+	rc := &reconciler.HeadlessServiceReconciler{
+		ResourceReconciler: &reconciler.ResourceReconciler{
+			Instance: instance,
+			Scheme:   scheme.Scheme,
+			Client:   k8sClient,
+		},
+	}
+
+	rc.Reconcile(t.Context())
+
+	service := &corev1.Service{}
+	assert.NoError(t, k8sClient.Get(t.Context(), types.NamespacedName{Name: instance.Name, Namespace: instance.Namespace}, service))
+	assert.Len(t, service.Spec.Ports, 5)
+
+	i := slices.IndexFunc(service.Spec.Ports, func(port corev1.ServicePort) bool {
+		return port.Name == "amqp"
 	})
-
-	AfterEach(func() {
-		Expect(k8sClient.Delete(context.Background(), instance)).To(Succeed())
+	assert.Equal(t, int32(1111), service.Spec.Ports[i].Port)
+	i = slices.IndexFunc(service.Spec.Ports, func(port corev1.ServicePort) bool {
+		return port.Name == "http"
 	})
-
-	Context("When building a default Service", func() {
-		It("Should return a headless service with default ports", func() {
-			rc.Reconcile(context.Background())
-
-			service := &corev1.Service{}
-			Expect(k8sClient.Get(context.Background(), namespacedName, service)).To(Succeed())
-			Expect(service.Name).To(Equal(namespacedName.Name))
-			Expect(service.Spec.ClusterIP).To(Equal("None"))
-			Expect(service.Spec.Ports).To(HaveLen(3)) // amqp, http, and mqtt
-		})
+	assert.NotEqual(t, i, -1)
+	assert.Equal(t, int32(2222), service.Spec.Ports[i].Port)
+	i = slices.IndexFunc(service.Spec.Ports, func(port corev1.ServicePort) bool {
+		return port.Name == "amqps"
 	})
-
-	Context("When providing custom ports", func() {
-		BeforeEach(func() {
-			instance.Spec.Config.Amqp.Port = 1111
-			instance.Spec.Config.Mgmt.Port = 2222
-			instance.Spec.Config.Amqp.TlsPort = 3333
-			instance.Spec.Config.Mgmt.TlsPort = 4444
-			instance.Spec.Config.Mqtt.Port = 5555
-			Expect(k8sClient.Update(context.Background(), instance)).To(Succeed())
-		})
-
-		It("Should create service with all specified ports", func() {
-			rc.Reconcile(context.Background())
-
-			service := &corev1.Service{}
-			err := k8sClient.Get(context.Background(), namespacedName, service)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(service.Spec.Ports).To(HaveLen(5))
-			i := slices.IndexFunc(service.Spec.Ports, func(port corev1.ServicePort) bool {
-				return port.Name == "amqp"
-			})
-			Expect(service.Spec.Ports[i].Port).To(Equal(int32(1111)))
-			i = slices.IndexFunc(service.Spec.Ports, func(port corev1.ServicePort) bool {
-				return port.Name == "http"
-			})
-			Expect(i).ToNot(Equal(-1))
-			Expect(service.Spec.Ports[i].Port).To(Equal(int32(2222)))
-			i = slices.IndexFunc(service.Spec.Ports, func(port corev1.ServicePort) bool {
-				return port.Name == "amqps"
-			})
-			Expect(i).ToNot(Equal(-1))
-			Expect(service.Spec.Ports[i].Port).To(Equal(int32(3333)))
-			i = slices.IndexFunc(service.Spec.Ports, func(port corev1.ServicePort) bool {
-				return port.Name == "https"
-			})
-			Expect(i).ToNot(Equal(-1))
-			Expect(service.Spec.Ports[i].Port).To(Equal(int32(4444)))
-			i = slices.IndexFunc(service.Spec.Ports, func(port corev1.ServicePort) bool {
-				return port.Name == "mqtt"
-			})
-			Expect(i).ToNot(Equal(-1))
-			Expect(service.Spec.Ports[i].Port).To(Equal(int32(5555)))
-		})
+	assert.NotEqual(t, i, -1)
+	assert.Equal(t, int32(3333), service.Spec.Ports[i].Port)
+	i = slices.IndexFunc(service.Spec.Ports, func(port corev1.ServicePort) bool {
+		return port.Name == "https"
 	})
-
-	Context("When clustering is enabled", func() {
-		BeforeEach(func() {
-			instance.Spec.EtcdEndpoints = []string{"etcd-0:2379"}
-			Expect(k8sClient.Update(context.Background(), instance)).To(Succeed())
-		})
-
-		It("Should include clustering port", func() {
-			rc.Reconcile(context.Background())
-
-			service := &corev1.Service{}
-			err := k8sClient.Get(context.Background(), namespacedName, service)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(service.Spec.Ports).To(HaveLen(4)) // amqp, http, mqtt and clustering
-			idx := slices.IndexFunc(service.Spec.Ports, func(port corev1.ServicePort) bool {
-				return port.Name == "clustering"
-			})
-			Expect(idx).NotTo(Equal(-1))
-			Expect(service.Spec.Ports[idx].Port).To(Equal(int32(5679)))
-		})
+	assert.NotEqual(t, i, -1)
+	assert.Equal(t, int32(4444), service.Spec.Ports[i].Port)
+	i = slices.IndexFunc(service.Spec.Ports, func(port corev1.ServicePort) bool {
+		return port.Name == "mqtt"
 	})
+	assert.NotEqual(t, i, -1)
+	assert.Equal(t, int32(5555), service.Spec.Ports[i].Port)
+}
 
-	Context("When updating fields", func() {
-		BeforeEach(func() {
-			instance.Spec.Config.Amqp.Port = 5672
-			Expect(k8sClient.Update(context.Background(), instance)).To(Succeed())
-			rc.Reconcile(context.Background())
-		})
+func TestClusteringPort(t *testing.T) {
+	t.Parallel()
+	instance := testutils.GetDefaultInstance(&testutils.DefaultInstanceSettings{})
+	err := testutils.CreateNamespace(t.Context(), k8sClient, instance.Namespace)
+	assert.NoErrorf(t, err, "Failed to create namespace")
+	defer testutils.DeleteNamespace(t.Context(), k8sClient, instance.Namespace)
 
-		It("Should update ports when they change", func() {
-			instance.Spec.Config.Amqp.Port = 1111
-			Expect(k8sClient.Update(context.Background(), instance)).To(Succeed())
-			rc.Reconcile(context.Background())
+	defer k8sClient.Delete(t.Context(), instance)
 
-			service := &corev1.Service{}
-			Expect(k8sClient.Get(context.Background(), namespacedName, service)).To(Succeed())
-			i := slices.IndexFunc(service.Spec.Ports, func(port corev1.ServicePort) bool {
-				return port.Name == "amqp"
-			})
-			Expect(service.Spec.Ports[i].Port).To(Equal(int32(1111)))
-		})
+	instance.Spec.EtcdEndpoints = []string{"etcd-0:2379"}
+	assert.NoError(t, k8sClient.Create(t.Context(), instance))
+
+	rc := &reconciler.HeadlessServiceReconciler{
+		ResourceReconciler: &reconciler.ResourceReconciler{
+			Instance: instance,
+			Scheme:   scheme.Scheme,
+			Client:   k8sClient,
+		},
+	}
+
+	rc.Reconcile(t.Context())
+
+	service := &corev1.Service{}
+	assert.NoError(t, k8sClient.Get(t.Context(), types.NamespacedName{Name: instance.Name, Namespace: instance.Namespace}, service))
+	assert.Len(t, service.Spec.Ports, 4)
+	idx := slices.IndexFunc(service.Spec.Ports, func(port corev1.ServicePort) bool {
+		return port.Name == "clustering"
 	})
-})
+	assert.NotEqual(t, idx, -1)
+	assert.Equal(t, int32(5679), service.Spec.Ports[idx].Port)
+}
+
+func TestPortChanges(t *testing.T) {
+	t.Parallel()
+	instance := testutils.GetDefaultInstance(&testutils.DefaultInstanceSettings{})
+	err := testutils.CreateNamespace(t.Context(), k8sClient, instance.Namespace)
+	assert.NoErrorf(t, err, "Failed to create namespace")
+	defer testutils.DeleteNamespace(t.Context(), k8sClient, instance.Namespace)
+
+	defer k8sClient.Delete(t.Context(), instance)
+
+	instance.Spec.Config.Amqp.Port = 5672
+	assert.NoError(t, k8sClient.Create(t.Context(), instance))
+
+	rc := &reconciler.HeadlessServiceReconciler{
+		ResourceReconciler: &reconciler.ResourceReconciler{
+			Instance: instance,
+			Scheme:   scheme.Scheme,
+			Client:   k8sClient,
+		},
+	}
+
+	rc.Reconcile(t.Context())
+
+	service := &corev1.Service{}
+	assert.NoError(t, k8sClient.Get(t.Context(), types.NamespacedName{Name: instance.Name, Namespace: instance.Namespace}, service))
+	idx := slices.IndexFunc(service.Spec.Ports, func(port corev1.ServicePort) bool {
+		return port.Name == "amqp"
+	})
+	assert.Equal(t, int32(5672), service.Spec.Ports[idx].Port)
+
+	instance.Spec.Config.Amqp.Port = 1111
+	assert.NoError(t, k8sClient.Update(t.Context(), instance))
+
+	rc.Reconcile(t.Context())
+
+	assert.NoError(t, k8sClient.Get(t.Context(), types.NamespacedName{Name: instance.Name, Namespace: instance.Namespace}, service))
+	idx = slices.IndexFunc(service.Spec.Ports, func(port corev1.ServicePort) bool {
+		return port.Name == "amqp"
+	})
+	assert.Equal(t, int32(1111), service.Spec.Ports[idx].Port)
+}

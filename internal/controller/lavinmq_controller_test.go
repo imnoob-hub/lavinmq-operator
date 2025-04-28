@@ -19,210 +19,276 @@ package controller
 import (
 	"context"
 	"fmt"
+	"testing"
 
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
-	"k8s.io/apimachinery/pkg/api/resource"
+	"github.com/stretchr/testify/assert"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	cloudamqpcomv1alpha1 "lavinmq-operator/api/v1alpha1"
+	testutils "lavinmq-operator/internal/test_utils"
 )
 
-var _ = Describe("LavinMQ Controller", func() {
-	var (
-		resourceName       = "test-resource"
-		ctx                = context.Background()
-		lavinmq            *cloudamqpcomv1alpha1.LavinMQ
-		typeNamespacedName types.NamespacedName
-		reconciler         *LavinMQReconciler
-	)
+func TestNonExistentLavinMQ(t *testing.T) {
+	t.Parallel()
+	reconciler, lavinmq := setupResources(t)
 
-	BeforeEach(func() {
-		typeNamespacedName = types.NamespacedName{
-			Name:      resourceName,
-			Namespace: "default",
-		}
+	defer cleanupResources(t, lavinmq)
 
-		// Base resource configuration
-		lavinmq = &cloudamqpcomv1alpha1.LavinMQ{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      resourceName,
-				Namespace: "default",
-			},
-			Spec: cloudamqpcomv1alpha1.LavinMQSpec{
-				DataVolumeClaimSpec: corev1.PersistentVolumeClaimSpec{
-					AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-					Resources: corev1.VolumeResourceRequirements{
-						Requests: corev1.ResourceList{
-							corev1.ResourceStorage: resource.MustParse("1Gi"),
-						},
-					},
-				},
-			},
-		}
-
-		reconciler = &LavinMQReconciler{
-			Client: k8sClient,
-			Scheme: k8sClient.Scheme(),
-		}
+	result, err := reconciler.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      lavinmq.Name,
+			Namespace: lavinmq.Namespace,
+		},
 	})
 
-	AfterEach(func() {
-		// Clean up StatefulSet
-		sts := &appsv1.StatefulSet{}
-		err := k8sClient.Get(ctx, typeNamespacedName, sts)
-		if err == nil {
-			Expect(k8sClient.Delete(ctx, sts)).To(Succeed())
-		}
+	assert.NoError(t, err)
+	assert.Equal(t, result, reconcile.Result{})
+}
 
-		// Clean up ConfigMap
-		configMap := &corev1.ConfigMap{}
-		err = k8sClient.Get(ctx, types.NamespacedName{Name: fmt.Sprintf("%s-config", resourceName), Namespace: "default"}, configMap)
-		if err == nil {
-			Expect(k8sClient.Delete(ctx, configMap)).To(Succeed())
-		}
+func TestDefaultLavinMQ(t *testing.T) {
+	t.Parallel()
+	_, lavinmq := setupResources(t)
 
-		// Clean up LavinMQ
+	defer cleanupResources(t, lavinmq)
+
+	err := k8sClient.Create(t.Context(), lavinmq)
+	assert.NoErrorf(t, err, "Failed to create LavinMQ resource")
+
+	resource := &cloudamqpcomv1alpha1.LavinMQ{}
+	err = k8sClient.Get(t.Context(), types.NamespacedName{
+		Name:      lavinmq.Name,
+		Namespace: lavinmq.Namespace,
+	}, resource)
+
+	assert.NoErrorf(t, err, "Failed to get LavinMQ resource")
+
+	assert.Equal(t, "cloudamqp/lavinmq:2.3.0", resource.Spec.Image)
+	assert.Equal(t, int32(1), resource.Spec.Replicas)
+}
+
+func TestCreatingCustomLavinMQ(t *testing.T) {
+
+	t.Run("Custom Port", func(t *testing.T) {
+		t.Parallel()
+		_, lavinmq := setupResources(t)
+
+		defer cleanupResources(t, lavinmq)
+
+		lavinmq.Spec.Config.Amqp.Port = 1337
+		err := k8sClient.Create(t.Context(), lavinmq)
+
+		assert.NoErrorf(t, err, "Failed to create LavinMQ resource")
+
 		resource := &cloudamqpcomv1alpha1.LavinMQ{}
-		err = k8sClient.Get(ctx, typeNamespacedName, resource)
-		if err == nil {
-			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+		err = k8sClient.Get(t.Context(), types.NamespacedName{
+			Name:      lavinmq.Name,
+			Namespace: lavinmq.Namespace,
+		}, resource)
+
+		assert.NoErrorf(t, err, "Failed to get LavinMQ resource")
+		assert.Equal(t, int32(1337), resource.Spec.Config.Amqp.Port)
+	})
+	t.Run("Custom Image", func(t *testing.T) {
+		t.Parallel()
+		_, lavinmq := setupResources(t)
+
+		defer cleanupResources(t, lavinmq)
+
+		lavinmq.Spec.Image = "cloudamqp/lavinmq:2.3.0"
+		err := k8sClient.Create(t.Context(), lavinmq)
+
+		assert.NoErrorf(t, err, "Failed to create LavinMQ resource")
+
+		resource := &cloudamqpcomv1alpha1.LavinMQ{}
+		err = k8sClient.Get(t.Context(), types.NamespacedName{
+			Name:      lavinmq.Name,
+			Namespace: lavinmq.Namespace,
+		}, resource)
+
+		assert.NoErrorf(t, err, "Failed to get LavinMQ resource")
+
+		assert.Equal(t, "cloudamqp/lavinmq:2.3.0", resource.Spec.Image)
+	})
+
+	t.Run("Custom Replicas", func(t *testing.T) {
+		t.Parallel()
+		_, lavinmq := setupResources(t)
+
+		defer cleanupResources(t, lavinmq)
+
+		lavinmq.Spec.Replicas = 3
+		err := k8sClient.Create(t.Context(), lavinmq)
+
+		assert.NoErrorf(t, err, "Failed to create LavinMQ resource")
+
+		resource := &cloudamqpcomv1alpha1.LavinMQ{}
+		err = k8sClient.Get(t.Context(), types.NamespacedName{
+			Name:      lavinmq.Name,
+			Namespace: lavinmq.Namespace,
+		}, resource)
+
+		assert.NoErrorf(t, err, "Failed to get LavinMQ resource")
+
+		assert.Equal(t, int32(3), resource.Spec.Replicas)
+	})
+}
+
+func TestUpdatingLavinMQ(t *testing.T) {
+	t.Run("Updating Ports", func(t *testing.T) {
+		t.Parallel()
+		reconciler, lavinmq := setupResources(t)
+
+		defer cleanupResources(t, lavinmq)
+
+		lavinmq.Spec.Config.Amqp.Port = 1337
+		err := k8sClient.Create(t.Context(), lavinmq)
+
+		assert.NoErrorf(t, err, "Failed to create LavinMQ resource")
+
+		defer cleanupResources(t, lavinmq)
+
+		_, err = reconciler.Reconcile(t.Context(), reconcile.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      lavinmq.Name,
+				Namespace: lavinmq.Namespace,
+			},
+		})
+
+		assert.NoErrorf(t, err, "Failed to reconcile")
+
+		lavinmq.Spec.Config.Amqp.Port = 1337
+		err = k8sClient.Update(t.Context(), lavinmq)
+		assert.NoErrorf(t, err, "Failed to update LavinMQ resource")
+
+		_, err = reconciler.Reconcile(t.Context(), reconcile.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      lavinmq.Name,
+				Namespace: lavinmq.Namespace,
+			},
+		})
+
+		assert.NoErrorf(t, err, "Failed to reconcile")
+
+		resource := &appsv1.StatefulSet{}
+		err = k8sClient.Get(t.Context(), types.NamespacedName{
+			Name:      lavinmq.Name,
+			Namespace: lavinmq.Namespace,
+		}, resource)
+
+		assert.NoErrorf(t, err, "Failed to get StatefulSet")
+
+		expectedPorts := []corev1.ContainerPort{
+			{ContainerPort: 15672, Name: "http", Protocol: "TCP"},
+			{ContainerPort: 1337, Name: "amqp", Protocol: "TCP"},
+			{ContainerPort: 1883, Name: "mqtt", Protocol: "TCP"},
+		}
+
+		assert.Len(t, resource.Spec.Template.Spec.Containers[0].Ports, len(expectedPorts))
+
+		for i, port := range expectedPorts {
+			assert.Equal(t, port, resource.Spec.Template.Spec.Containers[0].Ports[i])
 		}
 	})
 
-	Context("When a instance of LavinMQ doesn't exist", func() {
-		It("Should not return a error", func() {
-			_, err := reconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
+	t.Run("Updating Image", func(t *testing.T) {
+		t.Parallel()
+		reconciler, lavinmq := setupResources(t)
+
+		defer cleanupResources(t, lavinmq)
+
+		lavinmq.Spec.Image = "cloudamqp/lavinmq:2.2.0"
+		err := k8sClient.Create(t.Context(), lavinmq)
+
+		assert.NoErrorf(t, err, "Failed to create LavinMQ resource")
+
+		_, err = reconciler.Reconcile(t.Context(), reconcile.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      lavinmq.Name,
+				Namespace: lavinmq.Namespace,
+			},
 		})
+
+		assert.NoErrorf(t, err, "Failed to reconcile")
+
+		lavinmq.Spec.Image = "cloudamqp/lavinmq:2.3.0"
+		err = k8sClient.Update(t.Context(), lavinmq)
+		assert.NoErrorf(t, err, "Failed to update LavinMQ resource")
+
+		_, err = reconciler.Reconcile(t.Context(), reconcile.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      lavinmq.Name,
+				Namespace: lavinmq.Namespace,
+			},
+		})
+
+		assert.NoErrorf(t, err, "Failed to reconcile")
+
+		resource := &appsv1.StatefulSet{}
+		err = k8sClient.Get(t.Context(), types.NamespacedName{
+			Name:      lavinmq.Name,
+			Namespace: lavinmq.Namespace,
+		}, resource)
+
+		assert.NoErrorf(t, err, "Failed to get StatefulSet")
+
+		assert.Equal(t, "cloudamqp/lavinmq:2.3.0", resource.Spec.Template.Spec.Containers[0].Image)
 	})
 
-	Context("When a instance of LavinMQ exists", func() {
-		Context("When creating a default lavinmq resource", func() {
-			BeforeEach(func() {
-				By("creating the custom resource for the Kind LavinMQ")
-				Expect(k8sClient.Create(ctx, lavinmq)).To(Succeed())
-			})
+}
 
-			It("should verify the default image", func() {
-				resource := &cloudamqpcomv1alpha1.LavinMQ{}
-				err := k8sClient.Get(ctx, typeNamespacedName, resource)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(resource.Spec.Image).To(Equal("cloudamqp/lavinmq:2.2.0"))
-			})
+func setupResources(t *testing.T) (*LavinMQReconciler, *cloudamqpcomv1alpha1.LavinMQ) {
+	reconciler := &LavinMQReconciler{
+		Client: k8sClient,
+		Scheme: k8sClient.Scheme(),
+	}
 
-			It("should verify the default replicas", func() {
-				resource := &cloudamqpcomv1alpha1.LavinMQ{}
-				err := k8sClient.Get(ctx, typeNamespacedName, resource)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(resource.Spec.Replicas).To(Equal(int32(1)))
-			})
-		})
+	lavinmq := testutils.GetDefaultInstance(&testutils.DefaultInstanceSettings{})
+	err := testutils.CreateNamespace(t.Context(), k8sClient, lavinmq.Namespace)
+	assert.NoErrorf(t, err, "Failed to create namespace")
+	return reconciler, lavinmq
+}
 
-		Context("When creating a lavinmq cluster with custom port", func() {
-			BeforeEach(func() {
-				lavinmq.Spec.Config.Amqp.Port = 1337
-				Expect(k8sClient.Create(ctx, lavinmq)).To(Succeed())
-			})
+func cleanupResources(t *testing.T, lavinmq *cloudamqpcomv1alpha1.LavinMQ) {
+	resourceName := lavinmq.Name
+	namespace := lavinmq.Namespace
 
-			It("Should respect provided container ports", func() {
-				resource := &cloudamqpcomv1alpha1.LavinMQ{}
-				err := k8sClient.Get(ctx, typeNamespacedName, resource)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(resource.Spec.Config.Amqp.Port).To(Equal(int32(1337)))
-			})
-		})
+	// Clean up StatefulSet
+	sts := &appsv1.StatefulSet{}
+	err := k8sClient.Get(t.Context(), types.NamespacedName{
+		Name:      resourceName,
+		Namespace: namespace,
+	}, sts)
+	if err == nil {
+		err = k8sClient.Delete(t.Context(), sts)
+		assert.NoErrorf(t, err, "Failed to delete StatefulSet")
+	}
 
-		Context("When creating a lavinmq cluster with custom image", func() {
-			BeforeEach(func() {
-				lavinmq.Spec.Image = "cloudamqp/lavinmq:2.3.0"
-				Expect(k8sClient.Create(ctx, lavinmq)).To(Succeed())
-			})
+	// Clean up ConfigMap
+	configMap := &corev1.ConfigMap{}
+	err = k8sClient.Get(t.Context(), types.NamespacedName{
+		Name:      fmt.Sprintf("%s-config", resourceName),
+		Namespace: namespace,
+	}, configMap)
+	if err == nil {
+		err = k8sClient.Delete(t.Context(), configMap)
+		assert.NoErrorf(t, err, "Failed to delete ConfigMap")
+	}
 
-			It("Should respect provided image", func() {
-				resource := &cloudamqpcomv1alpha1.LavinMQ{}
-				err := k8sClient.Get(ctx, typeNamespacedName, resource)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(resource.Spec.Image).To(Equal("cloudamqp/lavinmq:2.3.0"))
-			})
-		})
+	// Clean up LavinMQ
+	resource := &cloudamqpcomv1alpha1.LavinMQ{}
+	err = k8sClient.Get(t.Context(), types.NamespacedName{
+		Name:      resourceName,
+		Namespace: namespace,
+	}, resource)
+	if err == nil {
+		err = k8sClient.Delete(t.Context(), resource)
+		assert.NoErrorf(t, err, "Failed to delete LavinMQ resource")
+	}
 
-		Context("When creating a lavinmq cluster with custom image", func() {
-			BeforeEach(func() {
-				lavinmq.Spec.Replicas = 3
-				Expect(k8sClient.Create(ctx, lavinmq)).To(Succeed())
-			})
-
-			It("Should respect provided replicas", func() {
-				resource := &cloudamqpcomv1alpha1.LavinMQ{}
-				err := k8sClient.Get(ctx, typeNamespacedName, resource)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(resource.Spec.Replicas).To(Equal(int32(3)))
-			})
-		})
-
-		Context("When updating the ports of the lavinmq cluster", func() {
-			BeforeEach(func() {
-				Expect(k8sClient.Create(ctx, lavinmq)).To(Succeed())
-				result, err := reconciler.Reconcile(ctx, reconcile.Request{
-					NamespacedName: typeNamespacedName,
-				})
-				Expect(err).NotTo(HaveOccurred())
-				Expect(result).To(Equal(reconcile.Result{}))
-				lavinmq.Spec.Config.Amqp.Port = 1337
-				Expect(k8sClient.Update(ctx, lavinmq)).To(Succeed())
-			})
-
-			It("Should update the ports of the lavinmq cluster", func() {
-				By("reconciling the resource")
-				result, err := reconciler.Reconcile(ctx, reconcile.Request{
-					NamespacedName: typeNamespacedName,
-				})
-				Expect(err).NotTo(HaveOccurred())
-				Expect(result).To(Equal(reconcile.Result{}))
-				resource := &appsv1.StatefulSet{}
-				err = k8sClient.Get(ctx, typeNamespacedName, resource)
-				Expect(err).NotTo(HaveOccurred())
-
-				Expect(resource.Spec.Template.Spec.Containers[0].Ports).To(Equal([]corev1.ContainerPort{
-					{ContainerPort: 15672, Name: "http", Protocol: "TCP"},
-					{ContainerPort: 1337, Name: "amqp", Protocol: "TCP"},
-					{ContainerPort: 1883, Name: "mqtt", Protocol: "TCP"},
-				}))
-			})
-		})
-
-		Context("When updating the image of the lavinmq cluster", func() {
-			BeforeEach(func() {
-				Expect(k8sClient.Create(ctx, lavinmq)).To(Succeed())
-				result, err := reconciler.Reconcile(ctx, reconcile.Request{
-					NamespacedName: typeNamespacedName,
-				})
-				Expect(err).NotTo(HaveOccurred())
-				Expect(result).To(Equal(reconcile.Result{}))
-				lavinmq.Spec.Image = "cloudamqp/lavinmq:2.3.0"
-				Expect(k8sClient.Update(ctx, lavinmq)).To(Succeed())
-			})
-
-			It("Should update the image of the lavinmq cluster", func() {
-				By("reconciling the resource")
-				result, err := reconciler.Reconcile(ctx, reconcile.Request{
-					NamespacedName: typeNamespacedName,
-				})
-				Expect(err).NotTo(HaveOccurred())
-				Expect(result).To(Equal(reconcile.Result{}))
-				resource := &appsv1.StatefulSet{}
-				err = k8sClient.Get(ctx, typeNamespacedName, resource)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(resource.Spec.Template.Spec.Containers[0].Image).To(Equal("cloudamqp/lavinmq:2.3.0"))
-			})
-		})
-	})
-})
+	err = testutils.DeleteNamespace(t.Context(), k8sClient, namespace)
+	assert.NoErrorf(t, err, "Failed to delete namespace")
+}
