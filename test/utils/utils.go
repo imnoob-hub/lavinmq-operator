@@ -22,8 +22,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-
-	"sigs.k8s.io/e2e-framework/support"
 )
 
 const (
@@ -31,7 +29,7 @@ const (
 	prometheusOperatorURL     = "https://github.com/prometheus-operator/prometheus-operator/" +
 		"releases/download/%s/bundle.yaml"
 
-	certmanagerVersion = "v1.14.4"
+	certmanagerVersion = "v1.17.2"
 	certmanagerURLTmpl = "https://github.com/jetstack/cert-manager/releases/download/%s/cert-manager.yaml"
 
 	etcdOperatorVersion = "v0.1.0"
@@ -167,7 +165,8 @@ func SetupEtcdCluster(namespace string) error {
 
 func BuildingOperatorImage(projectimage string) error {
 	fmt.Println("building the manager(Operator) image")
-	cmd := exec.Command("make", "docker-build", fmt.Sprintf("IMG=%s", projectimage))
+	os.Setenv("IMG", projectimage)
+	cmd := exec.Command("make", "docker-build", "build-installer")
 	_, err := Run(cmd)
 	if err != nil {
 		return err
@@ -176,75 +175,25 @@ func BuildingOperatorImage(projectimage string) error {
 	return nil
 }
 
-func InstallingOperator(projectimage string, kindClusterName string, kindCluster support.E2EClusterProvider) error {
-
+func InstallingOperator() error {
 	fmt.Println("installing the Operator CRD")
-	cmd := exec.Command("make", "install")
+	cmd := exec.Command("kubectl", "apply", "-f", "dist/install.yaml")
 	_, err := Run(cmd)
 	if err != nil {
 		return err
 	}
 
-	fmt.Println("deploying the controller-manager")
-	cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", projectimage))
+	// Wait for controller to be ready, which can take some time
+	cmd = exec.Command("kubectl", "wait", "deployment.apps/lavinmq-operator-controller-manager",
+		"--for", "condition=Available",
+		"--namespace", "lavinmq-operator-system",
+		"--timeout", "5m",
+	)
 	_, err = Run(cmd)
 	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func VerifyControllerUp(namespace string) error {
-	fmt.Println("validating that the controller-manager pod is running as expected")
-	cmd := exec.Command("kubectl", "get",
-		"pods", "-l", "control-plane=controller-manager",
-		"-o", "go-template={{ range .items }}"+
-			"{{ if not .metadata.deletionTimestamp }}"+
-			"{{ .metadata.name }}"+
-			"{{ \"\\n\" }}{{ end }}{{ end }}",
-		"-n", namespace,
-	)
-
-	podOutput, err := Run(cmd)
-	if err != nil {
-		return err
-	}
-
-	podNames := GetNonEmptyLines(string(podOutput))
-	if len(podNames) != 1 {
-		return fmt.Errorf("expect 1 controller pods running, but got %d", len(podNames))
-	}
-	controllerPodName := podNames[0]
-
-	// Validate pod status
-	cmd = exec.Command("kubectl", "get",
-		"pods", controllerPodName, "-o", "jsonpath={.status.phase}",
-		"-n", namespace,
-	)
-	status, err := Run(cmd)
-	if err != nil {
-		return err
-	}
-
-	if string(status) != "Running" {
-		return fmt.Errorf("controller pod in %s status", status)
+		return fmt.Errorf("failed to wait for controller to be ready: %w", err)
 	}
 	return nil
-}
-
-// GetNonEmptyLines converts given command output string into individual objects
-// according to line breakers, and ignores the empty elements in it.
-func GetNonEmptyLines(output string) []string {
-	var res []string
-	elements := strings.Split(output, "\n")
-	for _, element := range elements {
-		if element != "" {
-			res = append(res, element)
-		}
-	}
-
-	return res
 }
 
 // GetProjectDir will return the directory where the project is

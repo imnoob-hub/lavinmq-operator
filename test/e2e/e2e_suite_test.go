@@ -55,6 +55,15 @@ func TestMain(m *testing.M) {
 		},
 
 		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
+			log.Println("Installing cert manager...")
+			err := utils.InstallCertManager()
+			if err != nil {
+				return ctx, fmt.Errorf("failed to install cert manager: %w", err)
+			}
+			return ctx, nil
+		},
+
+		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
 			log.Println("Installing etcd operator...")
 			err := utils.InstallEtcdOperator()
 			if err != nil {
@@ -81,7 +90,7 @@ func TestMain(m *testing.M) {
 		envfuncs.LoadImageToCluster(kindClusterName, projectimage),
 		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
 			log.Println("Installing the operator...")
-			err := utils.InstallingOperator(projectimage, kindClusterName, kindCluster)
+			err := utils.InstallingOperator()
 			if err != nil {
 				return ctx, fmt.Errorf("failed to build and install operator: %w", err)
 			}
@@ -91,23 +100,22 @@ func TestMain(m *testing.M) {
 
 	// Cleanup
 	testEnv.Finish(
-		func(ctx context.Context, c *envconf.Config) (context.Context, error) {
+		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
 			log.Println("Undeploying LavinMQ controller...")
-			cmd := exec.Command("make", "undeploy", "ignore-not-found=true")
+			cmd := exec.Command("kubectl", "delete", "-f", "dist/install.yaml")
 			if _, err := utils.Run(cmd); err != nil {
-				log.Printf("Warning: Failed to undeploy controller: %s\n", err)
-			}
-
-			log.Println("Uninstalling crd...")
-			cmd = exec.Command("make", "uninstall", "ignore-not-found=true")
-			if _, err := utils.Run(cmd); err != nil {
-				log.Printf("Warning: Failed to install crd: %s\n", err)
+				log.Printf("Warning: Failed to teardown operator: %s\n", err)
 			}
 			return ctx, nil
 		},
 		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
 			log.Println("Uninstalling etcd operator...")
 			utils.UninstallEtcdOperator()
+			return ctx, nil
+		},
+		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
+			log.Println("Uninstalling cert manager...")
+			utils.UninstallCertManager()
 			return ctx, nil
 		},
 		func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
