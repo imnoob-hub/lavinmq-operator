@@ -179,6 +179,7 @@ func (b *StatefulSetReconciler) appendSpec(sts *appsv1.StatefulSet) *appsv1.Stat
 						},
 					},
 				},
+				Affinity: b.Instance.Spec.Affinity,
 			},
 		},
 		VolumeClaimTemplates: []corev1.PersistentVolumeClaim{

@@ -42,6 +42,10 @@ type LavinMQSpec struct {
 	// +optional
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
 
+	// +optional
+	// Affinity scheduling rules to be applied on created Pods.
+	Affinity *corev1.Affinity `json:"affinity,omitempty"`
+
 	// Will override the accessmode and force it to ReadWriteOnce
 	// +required
 	DataVolumeClaimSpec corev1.PersistentVolumeClaimSpec `json:"dataVolumeClaim"`
