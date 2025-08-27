@@ -11,6 +11,15 @@ spec:
   replicas: 3
   etcdEndpoints:
     - etcd-cluster-0.etcd-cluster.default.svc.cluster.local:2379
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: disktype
+            operator: In
+            values:
+            - ssd
   resources:
     requests:
       cpu: 500m
