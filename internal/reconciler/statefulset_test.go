@@ -154,6 +154,56 @@ func TestUpdateContainerResources(t *testing.T) {
 	assert.True(t, reflect.DeepEqual(Resources, sts.Spec.Template.Spec.Containers[0].Resources))
 }
 
+func TestStsAffinity(t *testing.T) {
+	t.Parallel()
+	affinity := &corev1.Affinity{
+				NodeAffinity: &corev1.NodeAffinity{
+					RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+						NodeSelectorTerms: []corev1.NodeSelectorTerm{
+							{
+								MatchExpressions: []corev1.NodeSelectorRequirement{
+									{
+										Key:      "foo",
+										Operator: "Exists",
+										Values:   nil,
+									},
+								},
+							},
+						},
+					},
+				},
+			}
+	instance := testutils.GetDefaultInstance(&testutils.DefaultInstanceSettings{})
+	instance.Spec.Affinity = affinity
+
+	err := testutils.CreateNamespace(t.Context(), k8sClient, instance.Namespace)
+	assert.NoErrorf(t, err, "Failed to create namespace")
+	defer testutils.DeleteNamespace(t.Context(), k8sClient, instance.Namespace)
+
+	configMap := createConfigMap(t, instance, "initial_config")
+	defer deleteConfigMap(t, configMap)
+
+	rc := &reconciler.StatefulSetReconciler{
+		ResourceReconciler: &reconciler.ResourceReconciler{
+			Instance: instance,
+			Scheme:   scheme.Scheme,
+			Client:   k8sClient,
+		},
+	}
+	err = k8sClient.Create(t.Context(), instance)
+	assert.NoErrorf(t, err, "Failed to create instance")
+
+	// Reconciler is creating the sts
+	_, err = rc.Reconcile(t.Context())
+	assert.NoErrorf(t, err, "Failed to reconcile instance")
+
+	sts := &appsv1.StatefulSet{}
+	err = k8sClient.Get(t.Context(), types.NamespacedName{Name: instance.Name, Namespace: instance.Namespace}, sts)
+	assert.NoErrorf(t, err, "Failed to get statefulset")
+
+	assert.True(t, reflect.DeepEqual(selector, sts.Spec.Template.Spec.Affinity))
+}
+
 func TestConfigHashAnnotation(t *testing.T) {
 	t.Parallel()
 	instance := testutils.GetDefaultInstance(&testutils.DefaultInstanceSettings{})

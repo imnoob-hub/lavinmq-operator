@@ -352,6 +352,11 @@ func (b *StatefulSetReconciler) diffTemplate(old *corev1.PodSpec) {
 		oldContainer.Ports = b.portsFromSpec()
 	}
 
+	if !reflect.DeepEqual(old.Affinity, b.Instance.Spec.Affinity) {
+		b.Logger.Info("Affinity changed, updating")
+		old.Affinity = b.Instance.Spec.Affinity
+	}
+
 	index := slices.IndexFunc(old.Volumes, func(v corev1.Volume) bool {
 		return v.Name == "tls"
 	})
